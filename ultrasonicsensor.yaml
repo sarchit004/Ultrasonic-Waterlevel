@@ -1,0 +1,207 @@
+# Board: NodeMCU v2 (ESP8266) (NodeMCU)
+# Definition: definitions/boards/nodemcuv2/manifest.yaml
+
+esphome:
+  name: ultrasonictank-id02
+  friendly_name: UltrasonicTank-id02
+
+esp8266:
+  board: nodemcuv2
+  restore_from_flash: true
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ap:
+    ssid: UTank02 Fallback Hotspot
+    password: !secret fallback_hotspot_password
+
+# Web portal setup with UI dashboard
+web_server:
+  port: 80
+  auth:
+    username: mets
+    password: !secret web_server_password
+
+captive_portal:
+
+# System Buttons for Restart and Factory Reset
+button:
+  - platform: restart
+    id: restartbtn
+    name: "Device Restart"
+  - platform: factory_reset
+    id: factoryreset
+    name: "Factory Reset"
+
+# User-configurable dynamic inputs exposed on the Web UI
+number:
+  - platform: template
+    name: "Sensor Distance when Full"
+    id: distance_full
+    unit_of_measurement: "m"
+    icon: "mdi:ruler"
+    min_value: 0.20
+    max_value: 2.00
+    step: 0.01
+    initial_value: 0.20
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Sensor Distance when Empty"
+    id: distance_empty
+    unit_of_measurement: "m"
+    icon: "mdi:ruler"
+    min_value: 0.50
+    max_value: 6.00
+    step: 0.01
+    initial_value: 5.00
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Relay OFF Threshold (Low Level)"
+    id: threshold_low
+    unit_of_measurement: "%"
+    icon: "mdi:water-minus"
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 20
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Relay ON Threshold (High Level)"
+    id: threshold_high
+    unit_of_measurement: "%"
+    icon: "mdi:water-plus"
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 40
+    optimistic: true
+    restore_value: true
+
+sensor:
+  - platform: ultrasonic
+    id: Distance
+    trigger_pin: GPIO5
+    echo_pin: GPIO4
+    name: "Distance"
+    update_interval: 1s
+    pulse_time: 20us
+    timeout: 6m
+
+  - platform: template
+    id: water_percentage
+    name: "% Full"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    icon: "mdi:water-percent"
+    lambda: |-
+      if (isnan(id(Distance).state)) {
+        return {};
+      }
+
+      float full = id(distance_full).state;
+      float empty = id(distance_empty).state;
+      float depth_range = empty - full;
+      float current_dist = id(Distance).state;
+
+      // Protection check to prevent division by zero or inverted values
+      if (depth_range <= 0.0) {
+        return {};
+      }
+
+      if (current_dist <= full) {
+        return 100.0;
+      } else if (current_dist >= empty) {
+        return 0.0;
+      } else {
+        return (100.0 - ((current_dist - full) / depth_range * 100.0));
+      }
+    update_interval: 1s
+
+    # Dynamic Relay Automation Logic using portal dynamic bounds
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return x < id(threshold_low).state;'
+            then:
+              - switch.turn_off: pump_relay
+        - if:
+            condition:
+              lambda: 'return x > id(threshold_high).state;'
+            then:
+              - switch.turn_on: pump_relay
+
+switch:
+  - platform: gpio
+    name: "Pump Switch"
+    id: pump_relay
+    pin: GPIO14
+    restore_mode: ALWAYS_OFF
+  - platform: gpio
+    name: "Buzzer"
+    id: buzzer
+    pin: GPIO13
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 12
+      mode:
+        input: True
+        pullup: True
+      inverted: True
+    name: "Reset Button"
+    filters:
+      - delayed_on: 50ms
+    on_click:
+      # Short Press (1s - 3s): WiFi Reset / Clear WiFi Credentials
+      - min_length: 1000ms
+        max_length: 3000ms
+        then:
+          - logger.log: "WiFi Reset Triggered"
+          # Buzzer pattern: di-di
+          - switch.turn_on: buzzer
+          - delay: 150ms
+          - switch.turn_off: buzzer
+          - delay: 150ms
+          - switch.turn_on: buzzer
+          - delay: 150ms
+          - switch.turn_off: buzzer
+          - lambda: |-
+              ESP.eraseConfig();
+          - button.press: restartbtn
+
+      # Long Press (5s - 10s): Full Factory Reset
+      - min_length: 5000ms
+        max_length: 10000ms
+        then:
+          - logger.log: "Factory Reset Triggered"
+          # Buzzer pattern: diiii-diiii-diiii-diiii
+          - switch.turn_on: buzzer
+          - delay: 800ms
+          - switch.turn_off: buzzer
+          - delay: 200ms
+          - switch.turn_on: buzzer
+          - delay: 800ms
+          - switch.turn_off: buzzer
+          - delay: 200ms
+          - switch.turn_on: buzzer
+          - delay: 800ms
+          - switch.turn_off: buzzer
+          - delay: 200ms
+          - switch.turn_on: buzzer
+          - delay: 800ms
+          - switch.turn_off: buzzer
+          - button.press: factoryreset
